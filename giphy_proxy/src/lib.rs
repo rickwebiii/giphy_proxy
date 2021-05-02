@@ -1,10 +1,9 @@
-use http::{request::*, response::*, Error, HttpServerBuilder, HttpVersion, Result};
+use http::{request::*, response::*, Error, HttpServerBuilder, Result};
 
 use async_std::{
     net::{TcpStream, ToSocketAddrs},
-    prelude::FutureExt,
 };
-use log::{debug, error, info, Level};
+use log::{debug, error, info};
 use futures::{AsyncReadExt, AsyncWriteExt};
 
 pub async fn server_main() -> Result<()> {
@@ -24,7 +23,7 @@ pub async fn server_main() -> Result<()> {
         .bind_addr(addrs)
         .build()?
         .run(handle_proxy)
-        .await;
+        .await?;
 
     Ok(())
 }
@@ -33,7 +32,7 @@ pub async fn server_main() -> Result<()> {
 /// We parse the request, open a socket to the destination (if valid), then proxy data in both
 /// directions until either stream closes. We then return a ConnectionClosed error, but the client
 /// should have received what it wanted.
-async fn handle_proxy(request: Request, mut stream: TcpStream) -> Result<Response> {
+async fn handle_proxy(request: Request, stream: TcpStream) -> Result<Response> {
     info!("Got request: {:?}", request);
 
     if request.start_line.method != Method::CONNECT {
