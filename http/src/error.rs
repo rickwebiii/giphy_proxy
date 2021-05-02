@@ -57,6 +57,11 @@ pub enum Error {
 
     /// Connection closed
     ConnectionClosed,
+
+    /// The specified URL doesnt' have a port.
+    MissingPort,
+
+    DnsLookupFailed,
 }
 
 impl From<std::io::Error> for Error {

@@ -1,23 +1,20 @@
-use http::{
-    Error,
-    HttpServerBuilder,
-    Result,
-    request::*,
-    response::*,
-};
+use http::{request::*, response::*, Error, HttpServerBuilder, HttpVersion, Result};
 
 use async_std::{
     net::{TcpStream, ToSocketAddrs},
     prelude::FutureExt,
 };
-use futures::{
-    AsyncReadExt,
-    AsyncWriteExt,
-};
+use log::{debug, error, info, Level};
+use futures::{AsyncReadExt, AsyncWriteExt};
 
-pub async fn do_main() -> Result<()> {
+pub async fn server_main() -> Result<()> {
+    simple_logger::SimpleLogger::new().init().unwrap();
+
+    info!("Starting server..");
+
     // TODO, make the address configurable
-    let addrs = "127.0.0.1:12345".to_socket_addrs()
+    let addrs = "127.0.0.1:12345"
+        .to_socket_addrs()
         .await?
         .into_iter()
         .next()
@@ -26,7 +23,8 @@ pub async fn do_main() -> Result<()> {
     HttpServerBuilder::new()
         .bind_addr(addrs)
         .build()?
-        .run(handle_proxy).await;
+        .run(handle_proxy)
+        .await;
 
     Ok(())
 }
@@ -36,56 +34,119 @@ pub async fn do_main() -> Result<()> {
 /// directions until either stream closes. We then return a ConnectionClosed error, but the client
 /// should have received what it wanted.
 async fn handle_proxy(request: Request, mut stream: TcpStream) -> Result<Response> {
+    info!("Got request: {:?}", request);
+
     if request.start_line.method != Method::CONNECT {
+        error!("Method is not CONNECT");
         return Ok(Response::error_response(Status::MethodNotAllowed, ""));
     }
 
     let host = match request.start_line.target {
         Target::Authority(a) => a,
         _ => {
-            return Ok(Response::error_response(Status::BadRequest, "Invalid proxy target"));
+            error!("Invalid proxy target");
+            return Ok(Response::error_response(
+                Status::BadRequest,
+                "Invalid proxy target",
+            ));
         }
     };
 
-    if host.domain != "api.giphy.com:443" {
-        return Ok(Response::error_response(Status::BadRequest, "Invalid proxy target"));
+    if let Some(port) = host.port {
+        if port != 443 {
+            error!("Invalid port {}", port);
+            return Ok(Response::error_response(
+                Status::BadRequest,
+                "Invalid port. Must use 443",
+            ));    
+        }
     }
 
-    let mut proxied_connection = match TcpStream::connect(host.domain).await {
+    if host.domain != "api.giphy.com" || host.port.is_none() {
+        error!("Invalid target domain: {}", host.domain);
+        return Ok(Response::error_response(
+            Status::BadRequest,
+            "Invalid proxy target",
+        ));
+    }
+
+    let addr = format!("{}:{}", host.domain, host.port.unwrap_or(0)).to_socket_addrs().await?
+        .into_iter()
+        .next();
+
+    let addr = match addr {
+        Some(s) => s,
+        None => {
+            error!("DNS lookup failed.");
+            return Ok(Response::error_response(
+                Status::BadGateway,
+                "Failed to proxy to remote service",
+            ));
+        }
+    };
+
+    let proxied_connection = match TcpStream::connect(addr).await {
         Ok(s) => s,
         Err(e) => {
-            return Ok(Response::error_response(Status::BadGateway, "Failed to proxy to remote service"));
+            error!("Failed to connect to remote service. {:?}", e);
+            return Ok(Response::error_response(
+                Status::BadGateway,
+                "Failed to proxy to remote service",
+            ));
         }
     };
 
-    let mut proxy_buf: Vec<u8> = vec![0; 1024];
-    let mut client_buf: Vec<u8> = vec![0; 1024];
+    info!("Connection established");
 
-    loop {
-        
-        let proxy_fut = tagged_read(&mut proxied_connection, &mut proxy_buf, "proxy");
-        let stream_fut = tagged_read(&mut stream, &mut client_buf, "client");
-        
-        let (bytes_read, tag) = proxy_fut.race(stream_fut).await?;
+    let ok_response = Response::error_response(Status::Ok, "");
+    ok_response.write_to_stream(stream.clone()).await?;
 
-        if bytes_read == 0 {
-            return Err(Error::ConnectionClosed)
-        }
+    let s1 = proxied_connection.clone();
+    let s2 = stream.clone();
 
-        if tag == "proxy" {
-            let (data, _) = proxy_buf.split_at(bytes_read);
+    let read_proxy = tokio::spawn(async move {
+        let _ = stream_copy(s1, s2).await;
+    });
 
-            stream.write_all(data).await?;
-        } else {
-            let (data, _) = proxy_buf.split_at(bytes_read);
+    let read_client = tokio::spawn(async move {
+        let _ = stream_copy(stream, proxied_connection).await;
+    });
 
-            proxied_connection.write_all(data).await?;
-        }
-    }
+    let _ = read_client.await;
+    let _ = read_proxy.await;
+
+    Err(Error::ConnectionClosed)
 }
 
-async fn tagged_read<'a, R: Unpin + AsyncReadExt>(s: &mut R, buf: &mut [u8], tag: &'a str) -> Result<(usize, &'a str)> {
-    let bytes_read = s.read(buf).await?;
+async fn stream_copy(mut s1: TcpStream, mut s2: TcpStream) -> Result<()> {
+    let mut buf: Vec<u8> = vec![0; 1024];
 
-    Ok((bytes_read, tag))
+    debug!("Connecting streams...");
+
+    loop {
+        match s1.read(&mut buf).await {
+            Ok(bytes_read) => {
+                info!("Got {} bytes from {:?}", bytes_read, s1.local_addr());
+                if bytes_read == 0 {
+                    info!("Connection closed.");
+                    break;
+                }
+
+                let (data, _) = buf.split_at(bytes_read);
+
+                match s2.write_all(data).await {
+                    Ok(_) => {},
+                    Err(e) => {
+                        error!("Write failed: {:?}", e);
+                    }
+                };
+            },
+            Err(e) => {
+                error!("{:?}", e);
+                break;
+            }
+        }
+    }
+
+    Err(Error::ConnectionClosed)
 }

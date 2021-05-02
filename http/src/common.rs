@@ -32,6 +32,7 @@ impl std::fmt::Display for HttpVersion {
     }
 }
 
+#[derive(Debug)]
 pub struct Headers {
     pub headers: HashMap<String, String>,
 }

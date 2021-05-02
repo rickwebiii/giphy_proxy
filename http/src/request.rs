@@ -1,6 +1,8 @@
-use async_std::io::ReadExt;
-use std::collections::HashMap;
+use async_std::io::{ReadExt};
+use futures::io::{AsyncWrite, AsyncWriteExt};
 use url::Url;
+
+use std::collections::HashMap;
 
 use std::str::FromStr;
 
@@ -43,8 +45,26 @@ impl Method {
     }
 }
 
+impl std::fmt::Display for Method {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let as_str = match self {
+            Self::GET => "GET",
+            Self::POST => "POST",
+            Self::PUT => "PUT",
+            Self::HEAD => "HEAD",
+            Self::DELETE => "DELETE",
+            Self::CONNECT => "CONNECT",
+            Self::OPTIONS => "OPTIONS",
+            Self::TRACE => "TRACE",
+            Self::PATCH => "PATCH",
+        };
+
+        write!(f, "{}", as_str)
+    }
+}
+
 /// The host and port part of a url. Should only be used with OPTIONS verb
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct Authority {
     pub domain: String,
     pub port: Option<u16>,
@@ -156,11 +176,38 @@ impl Target {
     }
 }
 
+impl std::fmt::Display for Target {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Path(s) => write!(f, "{}", s),
+            Self::Url(u) => write!(f, "{}", u),
+            Self::Authority(a) => {
+                write!(f, "{}", a.domain)?;
 
+                if let Some(port) = a.port {
+                    write!(f, ":{}", port)?
+                }
+
+                Ok(())
+            },
+            Self::Glob => write!(f, "*"),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct StartLine {
     pub method: Method,
     pub target: Target,
     pub version: HttpVersion,
+}
+
+impl std::fmt::Display for StartLine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} ", self.method)?;
+        write!(f, "{} ", self.target)?;
+        write!(f, "{}", self.version)
+    }
 }
 
 impl StartLine {
@@ -179,7 +226,7 @@ impl StartLine {
     }
 }
 
-
+#[derive(Debug)]
 pub struct Request {
     pub start_line: StartLine,
     pub headers: Headers,
@@ -295,12 +342,29 @@ impl Request {
             }
         }
     }
+
+    /// Writes this HTTP request into the given stream
+    pub async fn write_to_stream<S>(&self, stream: &mut S) -> Result<()> 
+        where S: AsyncWrite + Unpin
+    {
+        stream.write(format!("{}\r\n", self.start_line).as_bytes()).await?;
+        
+        for (k, v) in &self.headers.headers {
+            stream.write(format!("{}:{}\r\n", k, v).as_bytes()).await?;
+        }
+        
+        stream.write(b"\r\n").await?;
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod test {
     use async_std::io::{Cursor};
     
+    use futures::executor::LocalPool;
+
     use super::*;
 
     #[test]
@@ -345,5 +409,37 @@ mod test {
         assert_eq!(parsed.start_line.target, Target::Authority(Authority { domain: "horse.billy".to_owned(), port: Some(443) }));
         assert_eq!(parsed.start_line.version, HttpVersion::Http1_1);
         assert_eq!(parsed.headers.get("header1").unwrap(), "horse");
+    }
+
+    #[test]
+    pub fn can_write_http_request() {
+        let mut headers = HashMap::new();
+        headers.insert("Content-length".to_owned(), "0".to_owned());
+
+        let request = Request {
+            start_line: StartLine {
+                method: Method::CONNECT,
+                target: Target::Authority(Authority { domain: "horse.billy.com".to_owned(), port: Some(443) }),
+                version: HttpVersion::Http1_1,
+            },
+            headers: Headers { headers }
+        };
+
+        let data = vec![0u8; 0];
+        let mut stream = Cursor::new(data);
+
+
+
+        LocalPool::default().run_until(async {
+            request.write_to_stream(&mut stream).await.unwrap();
+        });
+        
+        let expected = format!(
+            "{}\r\n{}\r\n\r\n",
+            "CONNECT horse.billy.com:443 HTTP/1.1",
+            "Content-length:0",
+        );
+
+        assert_eq!(expected, std::str::from_utf8(&stream.into_inner()).unwrap());
     }
 }

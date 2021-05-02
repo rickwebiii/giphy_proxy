@@ -1,5 +1,5 @@
 [package]
-name = "giphy_proxy"
+name = "giphy_client"
 version = "0.1.0"
 authors = ["Rick Weber <rick.weber.iii@gmail.com>"]
 edition = "2018"
@@ -13,9 +13,8 @@ url = "2.2.1"
 regex = "1.5.2"
 async-std = { version = "1.9.0", features = ["unstable"] }
 log = "0.4.14"
-http = { path = "../http" }
 tokio = { version = "1.5.0", features = ["macros", "rt", "rt-multi-thread"] }
-simple_logger = "1.11.0"
+structopt = "0.3.21"
 
 [dev-dependencies]
 reqwest = "0.11.3"

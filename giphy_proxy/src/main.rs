@@ -1,14 +1,12 @@
-use http::{
-    Result,
-};
+use http::Result;
 
 mod lib;
 
-use crate::lib::do_main;
+use crate::lib::server_main;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    do_main().await?;
+    server_main().await?;
 
     Ok(())
 }

@@ -13,10 +13,10 @@
                     "test",
                     "--no-run",
                     "--lib",
-                    "--package=proxy"
+                    "--package=http:0.1.0"
                 ],
                 "filter": {
-                    "name": "proxy",
+                    "name": "http",
                     "kind": "lib"
                 }
             },

@@ -2,5 +2,6 @@
 
 members = [
     "http",
-    "giphy_proxy"
+    "giphy_proxy",
+    "giphy_client"
 ]

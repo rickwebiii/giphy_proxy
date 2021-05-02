@@ -3,7 +3,6 @@ use log::{debug, error};
 use futures::{
     Future,
     channel::oneshot::{Sender},
-    executor::{ThreadPool},
     stream::{StreamExt},
 };
 
@@ -54,7 +53,6 @@ impl HttpServerBuilder {
         Ok(HttpServer {
             parse_options: self.parse_options,
             bind_addr: self.bind_addr.ok_or(Error::NoBindAddress)?,
-            executor: ThreadPool::new()?,
             notify_start: Cell::from(self.notify_start),
         })
     }
@@ -63,7 +61,6 @@ impl HttpServerBuilder {
 pub struct HttpServer {
     parse_options: ParseOptions,
     bind_addr: SocketAddr,
-    executor: ThreadPool,
     notify_start: Cell<Option<Sender<()>>>,
 }
 
@@ -97,7 +94,7 @@ impl HttpServer {
                 }
             };    
 
-            self.executor.spawn_ok(async move {
+            let _ = tokio::spawn(async move {
                  match Request::parse(stream.clone(), &parse_options).await {
                     Ok(req) => {
                         let response = match handler(req, stream.clone()).await {
@@ -137,7 +134,7 @@ impl HttpServer {
                         return;
                     }
                 }
-            })
+            }).await;
         }).await;
         
         Ok(())
