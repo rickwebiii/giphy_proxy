@@ -10,7 +10,7 @@ use futures::{
 use std::cell::Cell;
 
 use crate::request::{ParseOptions, Request};
-use crate::response::Response;
+use crate::response::{Response, Status};
 use crate::error::{Error, Result};
 
 pub struct HttpServerBuilder {
@@ -100,7 +100,7 @@ impl HttpServer {
             self.executor.spawn_ok(async move {
                  match Request::parse(stream.clone(), &parse_options).await {
                     Ok(req) => {
-                        let mut response = match handler(req, stream.clone()).await {
+                        let response = match handler(req, stream.clone()).await {
                             Ok(res) => res,
                             Err(e) => {
                                 debug!("{:?}", e);
@@ -118,6 +118,22 @@ impl HttpServer {
                     },
                     Err(e) => {
                         debug!("Failed to parse HTTP request {:?}", e);
+
+                        let response = match e {
+                            Error::HeadersSectionTooLong => Response::error_response(Status::RequestHeaderFieldsTooLarge, "Headers too long."),
+                            Error::HeaderTooLong => Response::error_response(Status::RequestHeaderFieldsTooLarge, "A header is too long."),
+                            Error::StartLineExceedsMaxLength => Response::error_response(Status::UriTooLong, "The target in the start line is too long."),
+                            _ => Response::error_response(Status::BadRequest, &format!("{}", e))
+                        };
+
+                        match response.write_to_stream(stream).await {
+                            Ok(_) => {},
+                            Err(e) => {
+                                debug!("Failed to send response: {}", e);
+                                return;
+                            }
+                        };
+
                         return;
                     }
                 }
@@ -147,7 +163,7 @@ mod test {
     use std::collections::HashMap;
 
     #[test]
-    pub fn can_receive_requests() {
+    pub fn can_handle_get_requests() {
         async fn handle_request(req: Request, _stream: TcpStream) -> Result<Response> {
             assert_eq!(req.start_line.method, Method::GET);
             assert_eq!(req.start_line.target, Target::Path("/".to_owned()));

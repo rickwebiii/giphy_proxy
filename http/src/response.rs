@@ -1,4 +1,4 @@
-
+use async_std::io::Cursor;
 use futures::{
     AsyncRead,
     AsyncReadExt,
@@ -13,6 +13,8 @@ use crate::{
     error::Result
 };
 
+use std::collections::HashMap;
+
 pub struct Response {
     status: Status,
     http_version: HttpVersion,
@@ -21,7 +23,7 @@ pub struct Response {
 }
 
 impl Response {
-    pub async fn write_to_stream<S: Unpin + AsyncWriteExt>(&mut self, mut s: S) -> Result<()> {
+    pub async fn write_to_stream<S: Unpin + AsyncWriteExt>(mut self, mut s: S) -> Result<()> {
         let ver = format!("{} ", self.http_version);
         s.write(ver.as_bytes()).await?;
 
@@ -61,11 +63,23 @@ impl Response {
             body
         }
     }
+
+    pub fn error_response(status: Status, message: &str) -> Response {
+        let mut headers = HashMap::new();
+        headers.insert("Content-length".to_owned(), format!("{}", message.len()));
+    
+        Response::new(status, HttpVersion::Http1_1, Headers::new(headers), Box::new(Cursor::new(message.to_owned())))
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
 pub enum Status {
-    Ok
+    Ok,
+    BadRequest,
+    MethodNotAllowed,
+    RequestHeaderFieldsTooLarge,
+    UriTooLong,
+    BadGateway,
 
     // TODO: Other status codes
 }
@@ -74,12 +88,22 @@ impl Status {
     pub fn to_u16(&self) -> u16 {
         match self {
             Self::Ok => 200,
+            Self::MethodNotAllowed => 405,
+            Self::BadRequest => 400,
+            Self::RequestHeaderFieldsTooLarge => 431,
+            Self::UriTooLong => 414,
+            Self::BadGateway => 502,
         }
     }
 
     pub fn to_str(&self) -> &str {
         match self {
             Self::Ok => "OK",
+            Self::MethodNotAllowed => "Method Not Allowed",
+            Self::BadRequest => "Bad Request",
+            Self::RequestHeaderFieldsTooLarge => "Request Header Fields Too Large",
+            Self::UriTooLong => "URI Too Long",
+            Self::BadGateway => "Bad Gateway",
         }
     }
 }
