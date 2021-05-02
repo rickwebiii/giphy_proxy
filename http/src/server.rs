@@ -154,7 +154,6 @@ mod test {
     };
     use futures::{
         channel::oneshot,
-        executor::LocalPool
     };
 
     use std::collections::HashMap;
@@ -178,8 +177,13 @@ mod test {
             ))
         }
 
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+
         let addrs = 
-            LocalPool::default().run_until(async {
+            runtime.block_on(async {
                  "127.0.0.1:12345".to_socket_addrs().await
             })
             .unwrap()
@@ -190,23 +194,23 @@ mod test {
         let (tx, rx) = oneshot::channel::<()>();
 
         std::thread::spawn(move || {
-            LocalPool::default().run_until(async {
-                HttpServerBuilder::new()
-                    .bind_addr(addrs)
-                    .notify_start(tx)
-                    .build()
-                    .unwrap()
-                    .run(handle_request)
-                    .await
-                    .unwrap();
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            
+            runtime.block_on(async {
+                    HttpServerBuilder::new()
+                        .bind_addr(addrs)
+                        .notify_start(tx)
+                        .build()
+                        .unwrap()
+                        .run(handle_request)
+                        .await
+                        .unwrap();
             });
         });
 
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        
         runtime.block_on(async {
             rx.await.unwrap();
 
